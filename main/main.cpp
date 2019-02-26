@@ -32,7 +32,83 @@
 #include "soc/sens_reg.h"
 #include "soc/rtc.h"
 
+#include "esp_system.h"
+#include "rom/ets_sys.h"
+#include "nvs_flash.h"
+#include "driver/gpio.h"
+#include "sdkconfig.h"
+extern "C" {
+#include "DHT22.h"
+}
+
 static RTC_DATA_ATTR struct timeval sleep_enter_time;
+
+uint8_t msgData[20];
+
+SemaphoreHandle_t xSemaphore = NULL;
+
+void DHT_task(void *pvParameter)
+{
+   float hsum=0;
+   float tsum=0;
+   if( xSemaphore != NULL )
+   {
+       if( xSemaphoreTake( xSemaphore, ( TickType_t ) 10 ) == pdTRUE )
+       {
+	setDHTgpio( 4 );
+	printf( "Starting DHT Task\n\n");
+	int i=0;
+	for(i=0;i<10;i++) {
+		int ret = readDHT();
+	}
+	for(i=0;i<10;i++) {
+	
+		printf("=== Reading DHT %d ===\n",i );
+		int ret = readDHT();
+		
+		errorHandler(ret);
+
+		printf( "Hum %.1f\n", getHumidity() );
+		printf( "Tmp %.1f\n", getTemperature() );
+
+		hsum+= getHumidity();
+		tsum+= getTemperature();
+		
+		// -- wait at least 2 sec before reading again ------------
+		// The interval of whole process must be beyond 2 seconds !! 
+		vTaskDelay( 3000 / portTICK_RATE_MS );
+	}
+	int h=hsum/i*10;
+	int t=tsum/i*10;
+	sprintf((char*)msgData,"hum:%d,temp:%d",h,t);
+	xSemaphoreGive( xSemaphore );
+       }
+    
+   }
+   vTaskDelete( NULL );
+}
+
+//void app_main()
+//{
+//	nvs_flash_init();
+//	vTaskDelay( 1000 / portTICK_RATE_MS );
+//	xTaskCreate( &DHT_task, "DHT_task", 2048, NULL, 5, NULL );
+//}
+
+
+
+
+//void leggiDHT22(uint8_t* str){
+//	setDHTgpio( 4 );
+//	int ret = readDHT();
+//	////errorHandler(ret);
+//	int h= getHumidity()*10;
+//	int t= getTemperature()*10;
+//	//printf( "Hum %.1f\n", getHumidity() );
+//	//printf( "Tmp %.1f\n", getTemperature() );
+//	sprintf((char*)str,"hum:%d,temp:%d",h,t);
+//	//sprintf((char*)str,"hum:800,temp:320");
+//}
 
 void sleeppa(int sec)
 {
@@ -114,22 +190,38 @@ void sleeppa(int sec)
 static TheThingsNetwork ttn;
 
 const unsigned TX_INTERVAL = 60;
-static uint8_t msgData[] = "Hello, world";
-
+//static uint8_t msgData[] = "Hello, world";
+//uint8_t msgData[20];
+//uint8_t str[20];
 
 void sendMessages(void* pvParameter)
 {
-    while (1) {
-        printf("Sending message...\n");
-        TTNResponseCode res = ttn.transmitMessage(msgData, sizeof(msgData) - 1);
-        printf(res == kTTNSuccessfulTransmission ? "Message sent.\n" : "Transmission failed.\n");
-	sleeppa(1800);
-        //vTaskDelay(TX_INTERVAL * 1000 / portTICK_PERIOD_MS);
+   while (1) {
+   	if( xSemaphore != NULL )
+   	{
+    	    if( xSemaphoreTake( xSemaphore, ( TickType_t ) 10 ) == pdTRUE ) {
+		printf("semaforo libero\n");
+    	    	printf("Sending message...%s size:%d\n",msgData,sizeof(msgData));
+    	    	TTNResponseCode res = ttn.transmitMessage(msgData, sizeof(msgData) - 1);
+    	    	printf(res == kTTNSuccessfulTransmission ? "Message sent.\n" : "Transmission failed.\n");
+    	    	sleeppa(600);
+    	    	//vTaskDelay(TX_INTERVAL * 1000 / portTICK_PERIOD_MS);
+    	    }else{
+    	    	//printf("semaforo occupato");
+    	    }
+    	}
     }
 }
 
 extern "C" void app_main(void)
 {
+    vSemaphoreCreateBinary( xSemaphore );
+
+    nvs_flash_init();
+    vTaskDelay( 1000 / portTICK_RATE_MS );
+    xTaskCreate( &DHT_task, "DHT_task", 2048, NULL, 5, NULL );
+
+
     esp_err_t err;
     // Initialize the GPIO ISR handler service
     err = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
