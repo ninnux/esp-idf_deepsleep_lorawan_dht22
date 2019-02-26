@@ -60,6 +60,8 @@ void DHT_task(void *pvParameter)
 	int i=0;
 	for(i=0;i<10;i++) {
 		int ret = readDHT();
+		printf( "Hum %.1f\n", getHumidity() );
+		printf( "Tmp %.1f\n", getTemperature() );
 	}
 	for(i=0;i<10;i++) {
 	
